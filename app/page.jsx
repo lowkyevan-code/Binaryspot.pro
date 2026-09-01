@@ -2,10 +2,9 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-// Exact registered App ID & Deriv WebSocket gateway
-const OAUTH_APP_ID = '34hh45FQkPfMgbgj20uoR';
-const WS_APP_ID = '1089';
-const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${WS_APP_ID}`;
+// Using registered Deriv App ID
+const APP_ID = '34hh45FQkPfMgbgj20uoR';
+const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}&l=en&brand=deriv`;
 
 export default function BinarySpotPro() {
   const [activeTab, setActiveTab] = useState('welcome');
@@ -231,11 +230,10 @@ export default function BinarySpotPro() {
     }
   }, [symbol]);
 
-  // Exact registered URL with required trailing slash
   const handleOAuthLogin = () => {
     if (typeof window !== 'undefined') {
       const redirectUrl = 'https://binaryspot-pro.vercel.app/';
-      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${OAUTH_APP_ID}&l=en&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}`;
+      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=en&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}`;
     }
   };
 
@@ -255,7 +253,7 @@ export default function BinarySpotPro() {
           wsRef.current.send(JSON.stringify({ authorize: cleanToken }));
         } else {
           setIsAuthorizing(false);
-          setAuthError('Gateway connecting. Please tap authorize again in 2 seconds.');
+          setAuthError('Connecting to Deriv. Tap authorize again in 2 seconds.');
         }
       }, 1000);
       return;
@@ -478,7 +476,7 @@ export default function BinarySpotPro() {
         ))}
       </div>
 
-      {/* Main App Canvas */}
+      {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         {activeTab === 'welcome' && (
           <div className="space-y-8">
@@ -871,14 +869,14 @@ export default function BinarySpotPro() {
         )}
       </main>
 
-      {/* Dual Login Modal */}
+      {/* Dual Auth Modal */}
       {isAuthModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f1522] border border-slate-700 max-w-md w-full p-6 rounded-3xl shadow-2xl space-y-6">
             <div className="flex justify-between items-center text-left">
               <div>
                 <h3 className="text-lg font-bold text-white">Connect Deriv Account</h3>
-                <p className="text-xs text-slate-400">Choose your preferred login method</p>
+                <p className="text-xs text-slate-400">Authenticate via Deriv Token or OAuth</p>
               </div>
               <button onClick={() => setIsAuthModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
@@ -890,23 +888,10 @@ export default function BinarySpotPro() {
             )}
 
             <div className="space-y-4">
-              <button
-                onClick={handleOAuthLogin}
-                className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition transform active:scale-95 flex items-center justify-center gap-2"
-              >
-                <span>🔑</span> Log In with Deriv (OAuth)
-              </button>
-
-              <div className="flex items-center gap-3">
-                <hr className="flex-1 border-slate-800" />
-                <span className="text-[10px] uppercase font-bold text-slate-500">Or Paste API Token</span>
-                <hr className="flex-1 border-slate-800" />
-              </div>
-
               <div className="space-y-2">
                 <input
                   type="text"
-                  placeholder="Paste API Token (Read + Trade scopes)"
+                  placeholder="Paste Token (e.g. pat_0fb05588...)"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                   className="w-full bg-[#151d2d] border border-slate-700 p-3 rounded-xl text-sm text-slate-200 focus:border-emerald-500 font-mono"
@@ -914,11 +899,24 @@ export default function BinarySpotPro() {
                 <button
                   onClick={handleManualAuth}
                   disabled={isAuthorizing}
-                  className="w-full py-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-bold rounded-xl transition"
+                  className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition shadow-lg"
                 >
-                  {isAuthorizing ? 'Authorizing...' : 'Authorize API Token'}
+                  {isAuthorizing ? 'Authorizing Token...' : 'Authorize API Token'}
                 </button>
               </div>
+
+              <div className="flex items-center gap-3">
+                <hr className="flex-1 border-slate-800" />
+                <span className="text-[10px] uppercase font-bold text-slate-500">Or use OAuth</span>
+                <hr className="flex-1 border-slate-800" />
+              </div>
+
+              <button
+                onClick={handleOAuthLogin}
+                className="w-full py-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-bold rounded-xl transition"
+              >
+                🔑 Continue with Deriv Login (OAuth)
+              </button>
             </div>
           </div>
         </div>
