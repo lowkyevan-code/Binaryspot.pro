@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-const APP_ID = '1089';
+// Your registered Deriv App ID
+const APP_ID = '34hh45FQkPfMgbgj20uoR';
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}&l=en&brand=deriv`;
 
 export default function BinarySpotPro() {
@@ -14,9 +15,9 @@ export default function BinarySpotPro() {
   const [isConnected, setIsConnected] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isAuthorizing, setIsAuthorizing] = useState(false);
   const [authError, setAuthError] = useState('');
 
+  // Market & Digit stats
   const [symbol, setSymbol] = useState('R_100');
   const [lastTick, setLastTick] = useState(null);
   const [prevTick, setPrevTick] = useState(null);
@@ -25,6 +26,7 @@ export default function BinarySpotPro() {
   const [digitStats, setDigitStats] = useState(Array(10).fill(10));
   const [evenOddRatio, setEvenOddRatio] = useState({ even: 50, odd: 50 });
 
+  // Bot strategy settings
   const [strategy, setStrategy] = useState('DIGITDIFF');
   const [baseStake, setBaseStake] = useState('1.00');
   const [currentStake, setCurrentStake] = useState('1.00');
@@ -35,12 +37,14 @@ export default function BinarySpotPro() {
   const [predictionDigit, setPredictionDigit] = useState('0');
   const [presetName, setPresetName] = useState('Differs Safe');
 
+  // Performance metrics
   const [isBotRunning, setIsBotRunning] = useState(false);
   const [totalProfit, setTotalProfit] = useState(0);
   const [winCount, setWinCount] = useState(0);
   const [lossCount, setLossCount] = useState(0);
   const [logs, setLogs] = useState([]);
 
+  // Loop control refs
   const wsRef = useRef(null);
   const botRunningRef = useRef(false);
   const totalProfitRef = useRef(0);
@@ -50,13 +54,30 @@ export default function BinarySpotPro() {
   useEffect(() => { botRunningRef.current = isBotRunning; }, [isBotRunning]);
   useEffect(() => { totalProfitRef.current = totalProfit; }, [totalProfit]);
   useEffect(() => { currentStakeRef.current = parseFloat(currentStake) || 1.0; }, [currentStake]);
-  useEffect(() => { tokenRef.current = token.trim(); }, [token]);
+  useEffect(() => { tokenRef.current = token; }, [token]);
 
   const addLog = (msg, type = 'info') => {
     const time = new Date().toLocaleTimeString();
     setLogs((prev) => [{ time, msg, type }, ...prev.slice(0, 75)]);
   };
 
+  // 1. Catch tokens from OAuth redirect
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const token1 = params.get('token1');
+      const acct1 = params.get('acct1');
+
+      if (token1 && acct1) {
+        setToken(token1);
+        setAccountId(acct1);
+        tokenRef.current = token1;
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+  }, []);
+
+  // 2. WebSocket Manager
   const connectWebSocket = useCallback(() => {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
@@ -70,10 +91,9 @@ export default function BinarySpotPro() {
         setIsConnected(true);
         addLog('Deriv Gateway Connected.', 'system');
         ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
-        
-        const cleanToken = tokenRef.current.trim();
-        if (cleanToken) {
-          ws.send(JSON.stringify({ authorize: cleanToken }));
+
+        if (tokenRef.current) {
+          ws.send(JSON.stringify({ authorize: tokenRef.current }));
         }
       };
 
@@ -82,7 +102,6 @@ export default function BinarySpotPro() {
           const data = JSON.parse(event.data);
 
           if (data.msg_type === 'authorize') {
-            setIsAuthorizing(false);
             if (data.error) {
               setAuthError(data.error.message);
               addLog(`Auth Failed: ${data.error.message}`, 'error');
@@ -92,7 +111,7 @@ export default function BinarySpotPro() {
               setIsAuthorized(true);
               setAccountId(data.authorize.loginid);
               setIsAuthModalOpen(false);
-              addLog(`Authorized: ${data.authorize.loginid} (${data.authorize.email})`, 'success');
+              addLog(`Logged in: ${data.authorize.loginid} (${data.authorize.email || 'Deriv User'})`, 'success');
               ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
             }
           }
@@ -165,13 +184,11 @@ export default function BinarySpotPro() {
 
       ws.onerror = () => {
         setIsConnected(false);
-        setIsAuthorizing(false);
       };
 
       ws.onclose = () => {
         setIsConnected(false);
         setIsAuthorized(false);
-        setIsAuthorizing(false);
         setTimeout(() => connectWebSocket(), 2000);
       };
     } catch (err) {
@@ -186,31 +203,11 @@ export default function BinarySpotPro() {
     };
   }, [connectWebSocket]);
 
-  const handleManualAuth = () => {
-    const cleanToken = token.trim();
-    if (!cleanToken) {
-      setAuthError('Please paste your Deriv API token.');
-      return;
+  const handleOAuthLogin = () => {
+    if (typeof window !== 'undefined') {
+      const redirectUrl = 'https://binaryspot-pro.vercel.app/';
+      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=en&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}`;
     }
-    setAuthError('');
-    setIsAuthorizing(true);
-
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      addLog('Re-establishing connection...', 'system');
-      connectWebSocket();
-      setTimeout(() => {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ authorize: cleanToken }));
-        } else {
-          setIsAuthorizing(false);
-          setAuthError('Gateway connecting. Please tap authorize again in 2 seconds.');
-        }
-      }, 1200);
-      return;
-    }
-
-    addLog('Authorizing API Token with Deriv...', 'system');
-    wsRef.current.send(JSON.stringify({ authorize: cleanToken }));
   };
 
   const applyPreset = (name, strat, stake, mlt, dur, pred, tp, sl) => {
@@ -288,12 +285,12 @@ export default function BinarySpotPro() {
 
   return (
     <div className="min-h-screen bg-[#080b11] text-slate-100 font-sans selection:bg-emerald-500 selection:text-black">
-      {/* Broker Live Status Bar */}
+      {/* Live Status Bar */}
       <div className="bg-[#0e131d] border-b border-slate-800/80 px-4 py-2.5 text-xs text-slate-400 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-            <span className="font-semibold text-slate-300">{isConnected ? 'Deriv Financial Gateway Active' : 'Connecting Gateway...'}</span>
+            <span className="font-semibold text-slate-300">{isConnected ? 'Deriv Gateway Active' : 'Connecting Gateway...'}</span>
           </div>
           <span className="hidden md:inline text-slate-700">|</span>
           <div className="hidden md:flex items-center gap-2">
@@ -380,14 +377,24 @@ export default function BinarySpotPro() {
                     {balance !== null ? `$${parseFloat(balance).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '...'}
                   </p>
                 </div>
-                <button onClick={() => { setIsAuthorized(false); setAccountId(''); setBalance(null); }} className="text-xs text-slate-500 hover:text-rose-400 ml-1">✕</button>
+                <button
+                  onClick={() => {
+                    setIsAuthorized(false);
+                    setToken('');
+                    setAccountId('');
+                    setBalance(null);
+                  }}
+                  className="text-xs text-slate-500 hover:text-rose-400 ml-1"
+                >
+                  ✕
+                </button>
               </div>
             ) : (
               <button
                 onClick={() => { setAuthError(''); setIsAuthModalOpen(true); }}
                 className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition transform active:scale-95"
               >
-                Connect Deriv
+                Sign In with Deriv
               </button>
             )}
           </div>
@@ -434,7 +441,7 @@ export default function BinarySpotPro() {
                 <div className="pt-2 flex flex-wrap gap-4">
                   <button
                     onClick={() => setActiveTab('bots')}
-                    className="px-6 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-xl shadow-emerald-950/50 transition transform active:scale-95"
+                    className="px-6 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-xl transition transform active:scale-95"
                   >
                     Open Bot Studio ▶
                   </button>
@@ -660,7 +667,7 @@ export default function BinarySpotPro() {
                 <div className="flex-1 bg-[#080b11] p-3 rounded-xl border border-slate-800/80 font-mono text-xs overflow-y-auto space-y-2">
                   {logs.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-slate-600 text-xs text-center">
-                      Engine idle.<br />Authorize and tap Launch to trade.
+                      Engine idle.<br />Sign in and tap Launch to trade.
                     </div>
                   ) : (
                     logs.map((log, i) => (
@@ -808,12 +815,15 @@ export default function BinarySpotPro() {
         )}
       </main>
 
-      {/* Connect Account Modal */}
+      {/* Auth Modal with Deriv Login Gateway */}
       {isAuthModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f1522] border border-slate-700 max-w-md w-full p-6 rounded-3xl shadow-2xl space-y-6">
-            <div className="flex justify-between items-center">
-              <h3 className="text-lg font-bold text-white">Connect Deriv Account</h3>
+          <div className="bg-[#0f1522] border border-slate-700 max-w-md w-full p-6 rounded-3xl shadow-2xl space-y-6 text-center">
+            <div className="flex justify-between items-center text-left">
+              <div>
+                <h3 className="text-lg font-bold text-white">Connect Deriv Account</h3>
+                <p className="text-xs text-slate-400">Authenticate via Spotpro App</p>
+              </div>
               <button onClick={() => setIsAuthModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
@@ -823,23 +833,17 @@ export default function BinarySpotPro() {
               </div>
             )}
 
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <input
-                  type="text"
-                  placeholder="Paste API Token (Read + Trade scopes)"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  className="w-full bg-[#151d2d] border border-slate-700 p-3 rounded-xl text-sm text-slate-200 focus:border-emerald-500 font-mono"
-                />
-                <button
-                  onClick={handleManualAuth}
-                  disabled={isAuthorizing}
-                  className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition"
-                >
-                  {isAuthorizing ? 'Authorizing Token...' : 'Authorize Token'}
-                </button>
-              </div>
+            <div className="space-y-4 py-2">
+              <button
+                onClick={handleOAuthLogin}
+                className="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl transition transform active:scale-95 flex items-center justify-center gap-2"
+              >
+                <span>🔑</span> Log In with Deriv (Email / Password)
+              </button>
+
+              <p className="text-[11px] text-slate-500 leading-relaxed px-4">
+                You will be redirected to Deriv&apos;s authorization screen for <strong>Spotpro</strong> to sign in securely, then returned with your live balance loaded.
+              </p>
             </div>
           </div>
         </div>
