@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-// Exact Registered App ID & Deriv Endpoints
-const OAUTH_APP_ID = '34hh45FQkPfMgbgj20uoR';
+// Deriv Universal OAuth & WebSocket Gateway IDs
 const WS_URL = 'wss://ws.derivws.com/websockets/v3?app_id=1089';
+const OAUTH_APP_ID = '1089';
 
 export default function BinarySpotPro() {
   const [activeTab, setActiveTab] = useState('welcome');
@@ -241,18 +241,18 @@ export default function BinarySpotPro() {
     }
   }, [symbol]);
 
-  // Direct Deriv OAuth Window Generator
+  // Deriv OAuth Gateway Redirection
   const handleOAuthLogin = () => {
     if (typeof window !== 'undefined') {
-      const redirectUrl = 'https://binaryspot-pro.vercel.app/';
-      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${OAUTH_APP_ID}&l=en&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}`;
+      const redirectUrl = window.location.origin + window.location.pathname;
+      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${OAUTH_APP_ID}&l=EN&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}`;
     }
   };
 
   const handleManualAuth = () => {
     const cleanToken = token.trim();
     if (!cleanToken) {
-      setAuthError('Please paste your API token.');
+      setAuthError('Please paste your token.');
       return;
     }
     setAuthError('');
