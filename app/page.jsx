@@ -2,14 +2,12 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-// Registered Client ID and Gateway Configuration
-const CLIENT_ID = '34hh45FQkPfMgbgj20uoR';
-const WS_URL = 'wss://ws.derivws.com/websockets/v3?app_id=1089';
-const REDIRECT_URI = 'https://binaryspot-pro.vercel.app/';
+const APP_ID = '1089';
+const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 
 export default function BinarySpotPro() {
   const [activeTab, setActiveTab] = useState('welcome');
-  const [token, setToken] = useState('');
+  const [tokenInput, setTokenInput] = useState('');
   const [accountId, setAccountId] = useState('');
   const [balance, setBalance] = useState(null);
   const [currency, setCurrency] = useState('USD');
@@ -57,44 +55,24 @@ export default function BinarySpotPro() {
   useEffect(() => { botRunningRef.current = isBotRunning; }, [isBotRunning]);
   useEffect(() => { totalProfitRef.current = totalProfit; }, [totalProfit]);
   useEffect(() => { currentStakeRef.current = parseFloat(currentStake) || 1.0; }, [currentStake]);
-  useEffect(() => { tokenRef.current = token.trim(); }, [token]);
 
   const addLog = (msg, type = 'info') => {
     const time = new Date().toLocaleTimeString();
     setLogs((prev) => [{ time, msg, type }, ...prev.slice(0, 75)]);
   };
 
-  // 1. Extract tokens returned from Deriv Redirect (token1, token2, or OAuth token params)
+  // Restore persistent session
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const token1 = params.get('token1') || params.get('token') || params.get('access_token');
-      const acct1 = params.get('acct1') || params.get('acct') || params.get('account');
-
-      if (token1) {
-        setToken(token1);
-        if (acct1) setAccountId(acct1);
-        tokenRef.current = token1;
-        try {
-          localStorage.setItem('deriv_token', token1);
-          if (acct1) localStorage.setItem('deriv_acct', acct1);
-        } catch (e) {
-          console.error(e);
-        }
-        window.history.replaceState({}, document.title, window.location.pathname);
-      } else {
-        const savedToken = localStorage.getItem('deriv_token');
-        const savedAcct = localStorage.getItem('deriv_acct');
-        if (savedToken) {
-          setToken(savedToken);
-          if (savedAcct) setAccountId(savedAcct);
-          tokenRef.current = savedToken;
-        }
+      const savedToken = localStorage.getItem('deriv_active_token');
+      if (savedToken) {
+        tokenRef.current = savedToken;
+        setTokenInput(savedToken);
       }
     }
   }, []);
 
-  // 2. Resilient WebSocket Manager
+  // WebSocket Manager
   const connectWebSocket = useCallback(() => {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
@@ -106,18 +84,20 @@ export default function BinarySpotPro() {
 
       ws.onopen = () => {
         setIsConnected(true);
-        addLog('Deriv Gateway Connected.', 'system');
+        addLog('Deriv Trading Gateway Connected.', 'system');
 
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         pingIntervalRef.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ ping: 1 }));
           }
-        }, 25000);
+        }, 20000);
 
+        // Subscribe to live market ticks
         ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
 
-        const activeToken = tokenRef.current || (typeof window !== 'undefined' ? localStorage.getItem('deriv_token') : '');
+        // Auto authorize if token saved
+        const activeToken = tokenRef.current || (typeof window !== 'undefined' ? localStorage.getItem('deriv_active_token') : '');
         if (activeToken) {
           ws.send(JSON.stringify({ authorize: activeToken }));
         }
@@ -130,16 +110,16 @@ export default function BinarySpotPro() {
           if (data.msg_type === 'authorize') {
             setIsAuthorizing(false);
             if (data.error) {
-              setAuthError(data.error.message);
-              addLog(`Auth Error: ${data.error.message}`, 'error');
+              setAuthError(data.error.message || 'Authorization rejected by broker.');
+              addLog(`Auth Failed: ${data.error.message}`, 'error');
               setIsAuthorized(false);
-              localStorage.removeItem('deriv_token');
+              localStorage.removeItem('deriv_active_token');
             } else {
               setAuthError('');
               setIsAuthorized(true);
               setAccountId(data.authorize.loginid);
               setIsAuthModalOpen(false);
-              addLog(`Authorized: ${data.authorize.loginid} (${data.authorize.currency || 'USD'})`, 'success');
+              addLog(`Authorized: ${data.authorize.loginid} (${data.authorize.email || 'Deriv Account'})`, 'success');
               ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
             }
           }
@@ -242,23 +222,17 @@ export default function BinarySpotPro() {
     }
   }, [symbol]);
 
-  // Verified Deriv OAuth Gateway Redirection
-  const handleOAuthLogin = () => {
-    if (typeof window !== 'undefined') {
-      const url = `https://oauth.deriv.com/oauth2/authorize?client_id=${CLIENT_ID}&app_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&redirect_url=${encodeURIComponent(REDIRECT_URI)}`;
-      window.location.href = url;
-    }
-  };
-
-  const handleManualAuth = () => {
-    const cleanToken = token.trim();
+  const handleAuthorize = () => {
+    const cleanToken = tokenInput.trim();
     if (!cleanToken) {
-      setAuthError('Please paste your API token.');
+      setAuthError('Please paste your Deriv API token.');
       return;
     }
+
     setAuthError('');
     setIsAuthorizing(true);
-    localStorage.setItem('deriv_token', cleanToken);
+    tokenRef.current = cleanToken;
+    localStorage.setItem('deriv_active_token', cleanToken);
 
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       connectWebSocket();
@@ -267,9 +241,9 @@ export default function BinarySpotPro() {
           wsRef.current.send(JSON.stringify({ authorize: cleanToken }));
         } else {
           setIsAuthorizing(false);
-          setAuthError('Connecting to Deriv Gateway. Tap authorize again in 2 seconds.');
+          setAuthError('Broker gateway reconnecting. Please tap authorize again.');
         }
-      }, 1000);
+      }, 1200);
       return;
     }
 
@@ -332,7 +306,7 @@ export default function BinarySpotPro() {
     if (['DIGITMATCH', 'DIGITDIFF', 'DIGITOVER', 'DIGITUNDER'].includes(chosenStrategy)) {
       payload.barrier = predictionDigit.toString();
     }
-    addLog(`Submitting ${chosenStrategy} order ($${currentStakeRef.current})...`, 'trade');
+    addLog(`Sending ${chosenStrategy} order ($${currentStakeRef.current})...`, 'trade');
     wsRef.current.send(JSON.stringify(payload));
   };
 
@@ -340,7 +314,7 @@ export default function BinarySpotPro() {
     if (!isAuthorized) { setIsAuthModalOpen(true); return; }
     setIsBotRunning(true);
     setCurrentStake(baseStake);
-    addLog(`Bot started with strategy: ${strategy}`, 'system');
+    addLog(`Bot running with strategy: ${strategy}`, 'system');
     setTimeout(() => { executeContract(strategy); }, 300);
   };
 
@@ -356,7 +330,7 @@ export default function BinarySpotPro() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-            <span className="font-semibold text-slate-300">{isConnected ? 'Deriv Financial Gateway Active' : 'Connecting Gateway...'}</span>
+            <span className="font-semibold text-slate-300">{isConnected ? 'Deriv Gateway Active' : 'Connecting Gateway...'}</span>
           </div>
           <span className="hidden md:inline text-slate-700">|</span>
           <div className="hidden md:flex items-center gap-2">
@@ -446,11 +420,10 @@ export default function BinarySpotPro() {
                 <button
                   onClick={() => {
                     setIsAuthorized(false);
-                    setToken('');
+                    setTokenInput('');
                     setAccountId('');
                     setBalance(null);
-                    localStorage.removeItem('deriv_token');
-                    localStorage.removeItem('deriv_acct');
+                    localStorage.removeItem('deriv_active_token');
                   }}
                   className="text-xs text-slate-500 hover:text-rose-400 ml-1"
                 >
@@ -490,7 +463,7 @@ export default function BinarySpotPro() {
         ))}
       </div>
 
-      {/* Main App Canvas */}
+      {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         {activeTab === 'welcome' && (
           <div className="space-y-8">
@@ -735,7 +708,7 @@ export default function BinarySpotPro() {
                 <div className="flex-1 bg-[#080b11] p-3 rounded-xl border border-slate-800/80 font-mono text-xs overflow-y-auto space-y-2">
                   {logs.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-slate-600 text-xs text-center">
-                      Engine idle.<br />Authorize and tap Launch to trade.
+                      Engine idle.<br />Authorize token to start trading.
                     </div>
                   ) : (
                     logs.map((log, i) => (
@@ -883,14 +856,14 @@ export default function BinarySpotPro() {
         )}
       </main>
 
-      {/* Auth Modal */}
+      {/* Direct Authorize Modal */}
       {isAuthModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f1522] border border-slate-700 max-w-md w-full p-6 rounded-3xl shadow-2xl space-y-6">
             <div className="flex justify-between items-center text-left">
               <div>
                 <h3 className="text-lg font-bold text-white">Connect Deriv Account</h3>
-                <p className="text-xs text-slate-400">Authenticate Spotpro</p>
+                <p className="text-xs text-slate-400">Authorize live trading session</p>
               </div>
               <button onClick={() => setIsAuthModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
@@ -902,34 +875,28 @@ export default function BinarySpotPro() {
             )}
 
             <div className="space-y-4">
-              <button
-                onClick={handleOAuthLogin}
-                className="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl transition transform active:scale-95 flex items-center justify-center gap-2"
-              >
-                <span>🔑</span> Authorize Spotpro on Deriv
-              </button>
-
-              <div className="flex items-center gap-3">
-                <hr className="flex-1 border-slate-800" />
-                <span className="text-[10px] uppercase font-bold text-slate-500">Or Paste API Token</span>
-                <hr className="flex-1 border-slate-800" />
-              </div>
-
               <div className="space-y-2">
                 <input
                   type="text"
-                  placeholder="Paste Token / Key"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  className="w-full bg-[#151d2d] border border-slate-700 p-3 rounded-xl text-sm text-slate-200 focus:border-emerald-500 font-mono"
+                  placeholder="Paste Token (pat_0fb0... or direct API token)"
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value)}
+                  className="w-full bg-[#151d2d] border border-slate-700 p-3.5 rounded-xl text-sm text-slate-200 focus:border-emerald-500 font-mono"
                 />
                 <button
-                  onClick={handleManualAuth}
+                  onClick={handleAuthorize}
                   disabled={isAuthorizing}
-                  className="w-full py-3.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 font-black text-xs uppercase tracking-wider rounded-xl transition"
+                  className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 disabled:bg-slate-700 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition shadow-lg"
                 >
-                  {isAuthorizing ? 'Authorizing Token...' : 'Authorize Token'}
+                  {isAuthorizing ? 'Authorizing Session...' : 'Authorize Account'}
                 </button>
+              </div>
+
+              <div className="bg-slate-900/70 border border-slate-800 p-3 rounded-xl text-[11px] text-slate-400 leading-relaxed text-left space-y-1">
+                <p className="font-semibold text-slate-300">Need a fresh token?</p>
+                <p>1. Go to <a href="https://app.deriv.com/account/api-token" target="_blank" rel="noreferrer" className="text-emerald-400 underline">Deriv API Tokens</a>.</p>
+                <p>2. Select scopes: <strong>Read</strong>, <strong>Trade</strong>, <strong>Payments</strong>, <strong>Admin</strong>.</p>
+                <p>3. Generate and paste the key above.</p>
               </div>
             </div>
           </div>
