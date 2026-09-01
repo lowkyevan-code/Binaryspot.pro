@@ -2,9 +2,10 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-const APP_ID = '34hh45FQkPfMgbgj20uoR';
+// Registered Client ID and Gateway Configuration
+const CLIENT_ID = '34hh45FQkPfMgbgj20uoR';
 const WS_URL = 'wss://ws.derivws.com/websockets/v3?app_id=1089';
-const REDIRECT_URL = 'https://binaryspot-pro.vercel.app/';
+const REDIRECT_URI = 'https://binaryspot-pro.vercel.app/';
 
 export default function BinarySpotPro() {
   const [activeTab, setActiveTab] = useState('welcome');
@@ -63,20 +64,20 @@ export default function BinarySpotPro() {
     setLogs((prev) => [{ time, msg, type }, ...prev.slice(0, 75)]);
   };
 
-  // 1. Process OAuth Tokens returned from Deriv Redirect URL
+  // 1. Extract tokens returned from Deriv Redirect (token1, token2, or OAuth token params)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      const token1 = params.get('token1');
-      const acct1 = params.get('acct1');
+      const token1 = params.get('token1') || params.get('token') || params.get('access_token');
+      const acct1 = params.get('acct1') || params.get('acct') || params.get('account');
 
-      if (token1 && acct1) {
+      if (token1) {
         setToken(token1);
-        setAccountId(acct1);
+        if (acct1) setAccountId(acct1);
         tokenRef.current = token1;
         try {
           localStorage.setItem('deriv_token', token1);
-          localStorage.setItem('deriv_acct', acct1);
+          if (acct1) localStorage.setItem('deriv_acct', acct1);
         } catch (e) {
           console.error(e);
         }
@@ -84,16 +85,16 @@ export default function BinarySpotPro() {
       } else {
         const savedToken = localStorage.getItem('deriv_token');
         const savedAcct = localStorage.getItem('deriv_acct');
-        if (savedToken && savedAcct) {
+        if (savedToken) {
           setToken(savedToken);
-          setAccountId(savedAcct);
+          if (savedAcct) setAccountId(savedAcct);
           tokenRef.current = savedToken;
         }
       }
     }
   }, []);
 
-  // 2. High-Stability WebSocket Manager
+  // 2. Resilient WebSocket Manager
   const connectWebSocket = useCallback(() => {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
@@ -241,10 +242,11 @@ export default function BinarySpotPro() {
     }
   }, [symbol]);
 
-  // Deriv OAuth Trigger
+  // Verified Deriv OAuth Gateway Redirection
   const handleOAuthLogin = () => {
     if (typeof window !== 'undefined') {
-      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&redirect_url=${encodeURIComponent(REDIRECT_URL)}`;
+      const url = `https://oauth.deriv.com/oauth2/authorize?client_id=${CLIENT_ID}&app_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&redirect_url=${encodeURIComponent(REDIRECT_URI)}`;
+      window.location.href = url;
     }
   };
 
