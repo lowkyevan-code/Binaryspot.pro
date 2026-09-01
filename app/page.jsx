@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 const APP_ID = '1089';
-const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
+const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}&l=en&brand=deriv`;
 
 export default function BinarySpotPro() {
   const [activeTab, setActiveTab] = useState('welcome');
@@ -14,6 +14,8 @@ export default function BinarySpotPro() {
   const [isConnected, setIsConnected] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isAuthorizing, setIsAuthorizing] = useState(false);
+  const [authError, setAuthError] = useState('');
 
   const [symbol, setSymbol] = useState('R_100');
   const [lastTick, setLastTick] = useState(null);
@@ -43,125 +45,173 @@ export default function BinarySpotPro() {
   const botRunningRef = useRef(false);
   const totalProfitRef = useRef(0);
   const currentStakeRef = useRef(1.0);
+  const tokenRef = useRef('');
 
   useEffect(() => { botRunningRef.current = isBotRunning; }, [isBotRunning]);
   useEffect(() => { totalProfitRef.current = totalProfit; }, [totalProfit]);
   useEffect(() => { currentStakeRef.current = parseFloat(currentStake) || 1.0; }, [currentStake]);
+  useEffect(() => { tokenRef.current = token.trim(); }, [token]);
 
   const addLog = (msg, type = 'info') => {
     const time = new Date().toLocaleTimeString();
     setLogs((prev) => [{ time, msg, type }, ...prev.slice(0, 75)]);
   };
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const token1 = params.get('token1');
-      const acct1 = params.get('acct1');
-      if (token1 && acct1) {
-        setToken(token1);
-        setAccountId(acct1);
-        window.history.replaceState({}, document.title, window.location.pathname);
-      }
+  const connectWebSocket = useCallback(() => {
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
     }
-  }, []);
+
+    try {
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setIsConnected(true);
+        addLog('Deriv Gateway Connected.', 'system');
+        ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
+        
+        const cleanToken = tokenRef.current.trim();
+        if (cleanToken) {
+          ws.send(JSON.stringify({ authorize: cleanToken }));
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.msg_type === 'authorize') {
+            setIsAuthorizing(false);
+            if (data.error) {
+              setAuthError(data.error.message);
+              addLog(`Auth Failed: ${data.error.message}`, 'error');
+              setIsAuthorized(false);
+            } else {
+              setAuthError('');
+              setIsAuthorized(true);
+              setAccountId(data.authorize.loginid);
+              setIsAuthModalOpen(false);
+              addLog(`Authorized: ${data.authorize.loginid} (${data.authorize.email})`, 'success');
+              ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
+            }
+          }
+
+          if (data.msg_type === 'balance' && data.balance) {
+            setBalance(data.balance.balance);
+            setCurrency(data.balance.currency || 'USD');
+          }
+
+          if (data.msg_type === 'tick' && data.tick) {
+            const quote = data.tick.quote;
+            setLastTick((prev) => {
+              setPrevTick(prev);
+              return quote;
+            });
+
+            const strQuote = quote.toString();
+            const digit = parseInt(strQuote.charAt(strQuote.length - 1), 10);
+            if (!isNaN(digit)) {
+              setLastDigit(digit);
+              setDigitHistory((prev) => {
+                const updated = [digit, ...prev.slice(0, 99)];
+                const counts = Array(10).fill(0);
+                let evenCount = 0;
+                updated.forEach((d) => {
+                  counts[d]++;
+                  if (d % 2 === 0) evenCount++;
+                });
+                const total = updated.length || 1;
+                setDigitStats(counts.map((c) => Math.round((c / total) * 100)));
+                setEvenOddRatio({
+                  even: Math.round((evenCount / total) * 100),
+                  odd: Math.round(((total - evenCount) / total) * 100)
+                });
+                return updated;
+              });
+            }
+          }
+
+          if (data.msg_type === 'proposal') {
+            if (data.error) {
+              addLog(`Proposal Error: ${data.error.message}`, 'error');
+              if (botRunningRef.current) stopBot('Broker proposal rejected');
+            } else if (data.proposal) {
+              ws.send(JSON.stringify({ buy: data.proposal.id, price: data.proposal.ask_price }));
+            }
+          }
+
+          if (data.msg_type === 'buy') {
+            if (data.error) {
+              addLog(`Purchase Error: ${data.error.message}`, 'error');
+              if (botRunningRef.current) stopBot('Purchase failed');
+            } else {
+              addLog(`Active Contract #${data.buy.contract_id} [Stake: $${currentStakeRef.current}]`, 'trade');
+              ws.send(JSON.stringify({ proposal_open_contract: 1, contract_id: data.buy.contract_id, subscribe: 1 }));
+            }
+          }
+
+          if (data.msg_type === 'proposal_open_contract') {
+            const contract = data.proposal_open_contract;
+            if (contract && contract.is_sold) {
+              const profit = parseFloat(contract.profit);
+              handleTradeResult(profit > 0, profit);
+            }
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      };
+
+      ws.onerror = () => {
+        setIsConnected(false);
+        setIsAuthorizing(false);
+      };
+
+      ws.onclose = () => {
+        setIsConnected(false);
+        setIsAuthorized(false);
+        setIsAuthorizing(false);
+        setTimeout(() => connectWebSocket(), 2000);
+      };
+    } catch (err) {
+      console.error(err);
+    }
+  }, [symbol]);
 
   useEffect(() => {
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setIsConnected(true);
-      addLog('Secure WebSocket Gateway Connected.', 'system');
-      ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
-      if (token) ws.send(JSON.stringify({ authorize: token }));
+    connectWebSocket();
+    return () => {
+      if (wsRef.current) wsRef.current.close();
     };
+  }, [connectWebSocket]);
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+  const handleManualAuth = () => {
+    const cleanToken = token.trim();
+    if (!cleanToken) {
+      setAuthError('Please paste your Deriv API token.');
+      return;
+    }
+    setAuthError('');
+    setIsAuthorizing(true);
 
-      if (data.msg_type === 'authorize') {
-        if (data.error) {
-          addLog(`Auth failed: ${data.error.message}`, 'error');
-          setIsAuthorized(false);
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      addLog('Re-establishing connection...', 'system');
+      connectWebSocket();
+      setTimeout(() => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ authorize: cleanToken }));
         } else {
-          setIsAuthorized(true);
-          setAccountId(data.authorize.loginid);
-          setIsAuthModalOpen(false);
-          addLog(`Connected: ${data.authorize.loginid}`, 'success');
-          ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
+          setIsAuthorizing(false);
+          setAuthError('Gateway connecting. Please tap authorize again in 2 seconds.');
         }
-      }
+      }, 1200);
+      return;
+    }
 
-      if (data.msg_type === 'balance') {
-        setBalance(data.balance.balance);
-        setCurrency(data.balance.currency);
-      }
-
-      if (data.msg_type === 'tick' && data.tick) {
-        const quote = data.tick.quote;
-        setPrevTick(lastTick);
-        setLastTick(quote);
-        const strQuote = quote.toString();
-        const digit = parseInt(strQuote.charAt(strQuote.length - 1), 10);
-
-        if (!isNaN(digit)) {
-          setLastDigit(digit);
-          setDigitHistory((prev) => {
-            const updated = [digit, ...prev.slice(0, 99)];
-            const counts = Array(10).fill(0);
-            let evenCount = 0;
-            updated.forEach((d) => {
-              counts[d]++;
-              if (d % 2 === 0) evenCount++;
-            });
-            const total = updated.length || 1;
-            setDigitStats(counts.map((c) => Math.round((c / total) * 100)));
-            setEvenOddRatio({
-              even: Math.round((evenCount / total) * 100),
-              odd: Math.round(((total - evenCount) / total) * 100)
-            });
-            return updated;
-          });
-        }
-      }
-
-      if (data.msg_type === 'proposal') {
-        if (data.error) {
-          addLog(`Proposal error: ${data.error.message}`, 'error');
-          if (botRunningRef.current) stopBot('Contract rejected');
-        } else if (data.proposal) {
-          ws.send(JSON.stringify({ buy: data.proposal.id, price: data.proposal.ask_price }));
-        }
-      }
-
-      if (data.msg_type === 'buy') {
-        if (data.error) {
-          addLog(`Buy error: ${data.error.message}`, 'error');
-          if (botRunningRef.current) stopBot('Purchase failed');
-        } else {
-          addLog(`Contract #${data.buy.contract_id} active. Stake: $${currentStakeRef.current}`, 'trade');
-          ws.send(JSON.stringify({ proposal_open_contract: 1, contract_id: data.buy.contract_id, subscribe: 1 }));
-        }
-      }
-
-      if (data.msg_type === 'proposal_open_contract') {
-        const contract = data.proposal_open_contract;
-        if (contract && contract.is_sold) {
-          const profit = parseFloat(contract.profit);
-          handleTradeResult(profit > 0, profit);
-        }
-      }
-    };
-
-    ws.onclose = () => {
-      setIsConnected(false);
-      setIsAuthorized(false);
-      addLog('Connection lost. Reconnecting...', 'error');
-    };
-
-    return () => { ws.close(); };
-  }, [symbol]);
+    addLog('Authorizing API Token with Deriv...', 'system');
+    wsRef.current.send(JSON.stringify({ authorize: cleanToken }));
+  };
 
   const applyPreset = (name, strat, stake, mlt, dur, pred, tp, sl) => {
     setPresetName(name);
@@ -236,24 +286,14 @@ export default function BinarySpotPro() {
     addLog(`Bot halted: ${reason}`, 'system');
   };
 
-  const handleOAuthLogin = () => {
-    const redirectUrl = window.location.origin;
-    window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=en&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}`;
-  };
-
-  const handleManualAuth = () => {
-    if (!token || !wsRef.current) return;
-    wsRef.current.send(JSON.stringify({ authorize: token }));
-  };
-
   return (
     <div className="min-h-screen bg-[#080b11] text-slate-100 font-sans selection:bg-emerald-500 selection:text-black">
-      {/* Top Floating Live Ticker Bar */}
+      {/* Broker Live Status Bar */}
       <div className="bg-[#0e131d] border-b border-slate-800/80 px-4 py-2.5 text-xs text-slate-400 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-            <span className="font-semibold text-slate-300">{isConnected ? 'Deriv High-Speed Gateway' : 'Connecting Gateway...'}</span>
+            <span className="font-semibold text-slate-300">{isConnected ? 'Deriv Financial Gateway Active' : 'Connecting Gateway...'}</span>
           </div>
           <span className="hidden md:inline text-slate-700">|</span>
           <div className="hidden md:flex items-center gap-2">
@@ -279,19 +319,19 @@ export default function BinarySpotPro() {
         </div>
       </div>
 
-      {/* Navigation Header */}
+      {/* Main Header */}
       <header className="border-b border-slate-800 bg-[#0d121c]/90 backdrop-blur sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-8">
             <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab('welcome')}>
-              <div className="h-10 w-10 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-xl flex items-center justify-center font-black text-black text-xl shadow-lg shadow-emerald-950/40">
+              <div className="h-10 w-10 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-xl flex items-center justify-center font-black text-black text-xl shadow-lg">
                 BS
               </div>
               <div>
                 <span className="text-lg font-black tracking-tight text-white">
                   BINARY<span className="text-emerald-400">SPOT</span> PRO
                 </span>
-                <span className="hidden sm:block text-[9px] uppercase font-bold tracking-widest text-emerald-500/90 -mt-1">
+                <span className="hidden sm:block text-[9px] uppercase font-bold tracking-widest text-emerald-500 -mt-1">
                   Algorithmic Hub
                 </span>
               </div>
@@ -340,11 +380,11 @@ export default function BinarySpotPro() {
                     {balance !== null ? `$${parseFloat(balance).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '...'}
                   </p>
                 </div>
-                <button onClick={() => setIsAuthorized(false)} className="text-xs text-slate-500 hover:text-rose-400 ml-1">✕</button>
+                <button onClick={() => { setIsAuthorized(false); setAccountId(''); setBalance(null); }} className="text-xs text-slate-500 hover:text-rose-400 ml-1">✕</button>
               </div>
             ) : (
               <button
-                onClick={() => setIsAuthModalOpen(true)}
+                onClick={() => { setAuthError(''); setIsAuthModalOpen(true); }}
                 className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition transform active:scale-95"
               >
                 Connect Deriv
@@ -776,21 +816,17 @@ export default function BinarySpotPro() {
               <h3 className="text-lg font-bold text-white">Connect Deriv Account</h3>
               <button onClick={() => setIsAuthModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
-            <div className="space-y-4">
-              <button
-                onClick={handleOAuthLogin}
-                className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs uppercase tracking-wider rounded-xl transition shadow-lg"
-              >
-                Log In with Deriv (OAuth)
-              </button>
-              <div className="flex items-center gap-3">
-                <hr className="flex-1 border-slate-800" />
-                <span className="text-[10px] uppercase font-bold text-slate-500">Or use API token</span>
-                <hr className="flex-1 border-slate-800" />
+
+            {authError && (
+              <div className="bg-rose-950/40 border border-rose-800 text-rose-300 text-xs p-3 rounded-xl font-medium">
+                ⚠️ {authError}
               </div>
+            )}
+
+            <div className="space-y-4">
               <div className="space-y-2">
                 <input
-                  type="password"
+                  type="text"
                   placeholder="Paste API Token (Read + Trade scopes)"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
@@ -798,9 +834,10 @@ export default function BinarySpotPro() {
                 />
                 <button
                   onClick={handleManualAuth}
-                  className="w-full py-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-bold rounded-xl transition"
+                  disabled={isAuthorizing}
+                  className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition"
                 >
-                  Authorize Token
+                  {isAuthorizing ? 'Authorizing Token...' : 'Authorize Token'}
                 </button>
               </div>
             </div>
