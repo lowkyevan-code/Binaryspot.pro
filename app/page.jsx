@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-// Using registered Deriv App ID
-const APP_ID = '34hh45FQkPfMgbgj20uoR';
-const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}&l=en&brand=deriv`;
+// Deriv Public WebSocket Gateway & Registered OAuth App ID
+const WS_URL = 'wss://ws.derivws.com/websockets/v3?app_id=1089';
+const OAUTH_APP_ID = '34hh45FQkPfMgbgj20uoR';
 
 export default function BinarySpotPro() {
   const [activeTab, setActiveTab] = useState('welcome');
@@ -47,6 +47,7 @@ export default function BinarySpotPro() {
 
   // Loop control refs
   const wsRef = useRef(null);
+  const pingIntervalRef = useRef(null);
   const botRunningRef = useRef(false);
   const totalProfitRef = useRef(0);
   const currentStakeRef = useRef(1.0);
@@ -92,7 +93,7 @@ export default function BinarySpotPro() {
     }
   }, []);
 
-  // 2. WebSocket Engine
+  // 2. High-Stability WebSocket Manager
   const connectWebSocket = useCallback(() => {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
@@ -104,9 +105,20 @@ export default function BinarySpotPro() {
 
       ws.onopen = () => {
         setIsConnected(true);
-        addLog('Deriv Gateway Active.', 'system');
+        addLog('Deriv Gateway Connected.', 'system');
+
+        // Keep-alive ping every 25 seconds for mobile Safari
+        if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ ping: 1 }));
+          }
+        }, 25000);
+
+        // Subscribe to live market ticks
         ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
 
+        // Auto authorize if token is present
         const activeToken = tokenRef.current || (typeof window !== 'undefined' ? localStorage.getItem('deriv_token') : '');
         if (activeToken) {
           ws.send(JSON.stringify({ authorize: activeToken }));
@@ -209,6 +221,7 @@ export default function BinarySpotPro() {
         setIsConnected(false);
         setIsAuthorized(false);
         setIsAuthorizing(false);
+        if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         setTimeout(() => connectWebSocket(), 2000);
       };
     } catch (err) {
@@ -219,6 +232,7 @@ export default function BinarySpotPro() {
   useEffect(() => {
     connectWebSocket();
     return () => {
+      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
       if (wsRef.current) wsRef.current.close();
     };
   }, [connectWebSocket]);
@@ -233,7 +247,7 @@ export default function BinarySpotPro() {
   const handleOAuthLogin = () => {
     if (typeof window !== 'undefined') {
       const redirectUrl = 'https://binaryspot-pro.vercel.app/';
-      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=en&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}`;
+      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${OAUTH_APP_ID}&l=en&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}`;
     }
   };
 
@@ -253,7 +267,7 @@ export default function BinarySpotPro() {
           wsRef.current.send(JSON.stringify({ authorize: cleanToken }));
         } else {
           setIsAuthorizing(false);
-          setAuthError('Connecting to Deriv. Tap authorize again in 2 seconds.');
+          setAuthError('Connecting to Deriv Gateway. Tap authorize again in 2 seconds.');
         }
       }, 1000);
       return;
@@ -342,7 +356,7 @@ export default function BinarySpotPro() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-            <span className="font-semibold text-slate-300">{isConnected ? 'Deriv Financial Gateway Active' : 'Connecting Gateway...'}</span>
+            <span className="font-semibold text-slate-300">{isConnected ? 'Deriv Gateway Active' : 'Connecting Gateway...'}</span>
           </div>
           <span className="hidden md:inline text-slate-700">|</span>
           <div className="hidden md:flex items-center gap-2">
@@ -721,7 +735,7 @@ export default function BinarySpotPro() {
                 <div className="flex-1 bg-[#080b11] p-3 rounded-xl border border-slate-800/80 font-mono text-xs overflow-y-auto space-y-2">
                   {logs.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-slate-600 text-xs text-center">
-                      Engine idle.<br />Sign in and tap Launch to trade.
+                      Engine idle.<br />Authorize and tap Launch to trade.
                     </div>
                   ) : (
                     logs.map((log, i) => (
