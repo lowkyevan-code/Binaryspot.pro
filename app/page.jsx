@@ -2,9 +2,10 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-// Your registered Deriv App ID
-const APP_ID = '34hh45FQkPfMgbgj20uoR';
-const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}&l=en&brand=deriv`;
+// Registered App ID for OAuth URL, universal Gateway ID for WebSocket
+const OAUTH_APP_ID = '34hh45FQkPfMgbgj20uoR';
+const WS_APP_ID = '1089';
+const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${WS_APP_ID}`;
 
 export default function BinarySpotPro() {
   const [activeTab, setActiveTab] = useState('welcome');
@@ -61,7 +62,7 @@ export default function BinarySpotPro() {
     setLogs((prev) => [{ time, msg, type }, ...prev.slice(0, 75)]);
   };
 
-  // 1. Catch tokens from OAuth redirect
+  // 1. Read OAuth tokens from Deriv Redirect URL and store persistently
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -72,12 +73,26 @@ export default function BinarySpotPro() {
         setToken(token1);
         setAccountId(acct1);
         tokenRef.current = token1;
+        try {
+          localStorage.setItem('deriv_token', token1);
+          localStorage.setItem('deriv_acct', acct1);
+        } catch (e) {
+          console.error(e);
+        }
         window.history.replaceState({}, document.title, window.location.pathname);
+      } else {
+        const savedToken = localStorage.getItem('deriv_token');
+        const savedAcct = localStorage.getItem('deriv_acct');
+        if (savedToken && savedAcct) {
+          setToken(savedToken);
+          setAccountId(savedAcct);
+          tokenRef.current = savedToken;
+        }
       }
     }
   }, []);
 
-  // 2. WebSocket Manager
+  // 2. Resilient WebSocket Manager
   const connectWebSocket = useCallback(() => {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
@@ -90,10 +105,14 @@ export default function BinarySpotPro() {
       ws.onopen = () => {
         setIsConnected(true);
         addLog('Deriv Gateway Connected.', 'system');
+        
+        // Subscribe to live ticks
         ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
 
-        if (tokenRef.current) {
-          ws.send(JSON.stringify({ authorize: tokenRef.current }));
+        // Auto authorize if token exists
+        const activeToken = tokenRef.current || (typeof window !== 'undefined' ? localStorage.getItem('deriv_token') : '');
+        if (activeToken) {
+          ws.send(JSON.stringify({ authorize: activeToken }));
         }
       };
 
@@ -106,12 +125,13 @@ export default function BinarySpotPro() {
               setAuthError(data.error.message);
               addLog(`Auth Failed: ${data.error.message}`, 'error');
               setIsAuthorized(false);
+              localStorage.removeItem('deriv_token');
             } else {
               setAuthError('');
               setIsAuthorized(true);
               setAccountId(data.authorize.loginid);
               setIsAuthModalOpen(false);
-              addLog(`Logged in: ${data.authorize.loginid} (${data.authorize.email || 'Deriv User'})`, 'success');
+              addLog(`Authenticated: ${data.authorize.loginid}`, 'success');
               ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
             }
           }
@@ -203,10 +223,18 @@ export default function BinarySpotPro() {
     };
   }, [connectWebSocket]);
 
+  // Re-subscribe when symbol changes
+  useEffect(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ forget_all: 'ticks' }));
+      wsRef.current.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
+    }
+  }, [symbol]);
+
   const handleOAuthLogin = () => {
     if (typeof window !== 'undefined') {
-      const redirectUrl = 'https://binaryspot-pro.vercel.app/';
-      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=en&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}`;
+      const redirectUrl = window.location.origin;
+      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${OAUTH_APP_ID}&l=en&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}`;
     }
   };
 
@@ -383,6 +411,8 @@ export default function BinarySpotPro() {
                     setToken('');
                     setAccountId('');
                     setBalance(null);
+                    localStorage.removeItem('deriv_token');
+                    localStorage.removeItem('deriv_acct');
                   }}
                   className="text-xs text-slate-500 hover:text-rose-400 ml-1"
                 >
@@ -422,7 +452,7 @@ export default function BinarySpotPro() {
         ))}
       </div>
 
-      {/* Main App Canvas */}
+      {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         {activeTab === 'welcome' && (
           <div className="space-y-8">
