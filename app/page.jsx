@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-// Deriv Public WebSocket Gateway & Registered OAuth App ID
-const WS_URL = 'wss://ws.derivws.com/websockets/v3?app_id=1089';
+// Exact Registered App ID & Deriv Endpoints
 const OAUTH_APP_ID = '34hh45FQkPfMgbgj20uoR';
+const WS_URL = 'wss://ws.derivws.com/websockets/v3?app_id=1089';
 
 export default function BinarySpotPro() {
   const [activeTab, setActiveTab] = useState('welcome');
@@ -63,7 +63,7 @@ export default function BinarySpotPro() {
     setLogs((prev) => [{ time, msg, type }, ...prev.slice(0, 75)]);
   };
 
-  // 1. Process returned OAuth parameters or stored sessions
+  // 1. Process OAuth Tokens returned from Deriv Redirect URL
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -107,7 +107,6 @@ export default function BinarySpotPro() {
         setIsConnected(true);
         addLog('Deriv Gateway Connected.', 'system');
 
-        // Keep-alive ping every 25 seconds for mobile Safari
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         pingIntervalRef.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -115,10 +114,8 @@ export default function BinarySpotPro() {
           }
         }, 25000);
 
-        // Subscribe to live market ticks
         ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
 
-        // Auto authorize if token is present
         const activeToken = tokenRef.current || (typeof window !== 'undefined' ? localStorage.getItem('deriv_token') : '');
         if (activeToken) {
           ws.send(JSON.stringify({ authorize: activeToken }));
@@ -141,7 +138,7 @@ export default function BinarySpotPro() {
               setIsAuthorized(true);
               setAccountId(data.authorize.loginid);
               setIsAuthModalOpen(false);
-              addLog(`Logged in: ${data.authorize.loginid} (${data.authorize.currency || 'USD'})`, 'success');
+              addLog(`Authorized: ${data.authorize.loginid} (${data.authorize.currency || 'USD'})`, 'success');
               ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
             }
           }
@@ -244,6 +241,7 @@ export default function BinarySpotPro() {
     }
   }, [symbol]);
 
+  // Direct Deriv OAuth Window Generator
   const handleOAuthLogin = () => {
     if (typeof window !== 'undefined') {
       const redirectUrl = 'https://binaryspot-pro.vercel.app/';
@@ -902,6 +900,19 @@ export default function BinarySpotPro() {
             )}
 
             <div className="space-y-4">
+              <button
+                onClick={handleOAuthLogin}
+                className="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition transform active:scale-95 flex items-center justify-center gap-2"
+              >
+                <span>🔑</span> Continue with Deriv Login (OAuth)
+              </button>
+
+              <div className="flex items-center gap-3">
+                <hr className="flex-1 border-slate-800" />
+                <span className="text-[10px] uppercase font-bold text-slate-500">Or Paste API Token</span>
+                <hr className="flex-1 border-slate-800" />
+              </div>
+
               <div className="space-y-2">
                 <input
                   type="text"
@@ -913,24 +924,11 @@ export default function BinarySpotPro() {
                 <button
                   onClick={handleManualAuth}
                   disabled={isAuthorizing}
-                  className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition shadow-lg"
+                  className="w-full py-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-bold rounded-xl transition"
                 >
                   {isAuthorizing ? 'Authorizing Token...' : 'Authorize API Token'}
                 </button>
               </div>
-
-              <div className="flex items-center gap-3">
-                <hr className="flex-1 border-slate-800" />
-                <span className="text-[10px] uppercase font-bold text-slate-500">Or use OAuth</span>
-                <hr className="flex-1 border-slate-800" />
-              </div>
-
-              <button
-                onClick={handleOAuthLogin}
-                className="w-full py-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-bold rounded-xl transition"
-              >
-                🔑 Continue with Deriv Login (OAuth)
-              </button>
             </div>
           </div>
         </div>
