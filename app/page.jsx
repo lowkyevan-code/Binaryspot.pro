@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-// Spotpro App ID registered on Deriv Developer Portal
-const OAUTH_APP_ID = '34hh45FQkPfMgbgj20uoR';
+const APP_ID = '34hh45FQkPfMgbgj20uoR';
 const WS_URL = 'wss://ws.derivws.com/websockets/v3?app_id=1089';
+const REDIRECT_URL = 'https://binaryspot-pro.vercel.app/';
 
 export default function BinarySpotPro() {
   const [activeTab, setActiveTab] = useState('welcome');
@@ -45,7 +45,7 @@ export default function BinarySpotPro() {
   const [lossCount, setLossCount] = useState(0);
   const [logs, setLogs] = useState([]);
 
-  // Refs
+  // Loop control refs
   const wsRef = useRef(null);
   const pingIntervalRef = useRef(null);
   const botRunningRef = useRef(false);
@@ -63,7 +63,7 @@ export default function BinarySpotPro() {
     setLogs((prev) => [{ time, msg, type }, ...prev.slice(0, 75)]);
   };
 
-  // 1. Capture OAuth Token & Account ID upon return to Chrome
+  // 1. Process OAuth Tokens returned from Deriv Redirect URL
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -93,7 +93,7 @@ export default function BinarySpotPro() {
     }
   }, []);
 
-  // 2. Persistent WebSocket Connection
+  // 2. High-Stability WebSocket Manager
   const connectWebSocket = useCallback(() => {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
@@ -105,7 +105,7 @@ export default function BinarySpotPro() {
 
       ws.onopen = () => {
         setIsConnected(true);
-        addLog('Deriv Gateway Active.', 'system');
+        addLog('Deriv Gateway Connected.', 'system');
 
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         pingIntervalRef.current = setInterval(() => {
@@ -138,7 +138,7 @@ export default function BinarySpotPro() {
               setIsAuthorized(true);
               setAccountId(data.authorize.loginid);
               setIsAuthModalOpen(false);
-              addLog(`Authenticated: ${data.authorize.loginid} (${data.authorize.currency || 'USD'})`, 'success');
+              addLog(`Authorized: ${data.authorize.loginid} (${data.authorize.currency || 'USD'})`, 'success');
               ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
             }
           }
@@ -241,18 +241,17 @@ export default function BinarySpotPro() {
     }
   }, [symbol]);
 
-  // Open the Deriv OAuth consent screen matching Tradekit's flow
+  // Deriv OAuth Trigger
   const handleOAuthLogin = () => {
     if (typeof window !== 'undefined') {
-      const redirectUrl = 'https://binaryspot-pro.vercel.app/';
-      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${OAUTH_APP_ID}&l=EN&brand=deriv&redirect_url=${encodeURIComponent(redirectUrl)}&scope=read,trade,payments,admin`;
+      window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&redirect_url=${encodeURIComponent(REDIRECT_URL)}`;
     }
   };
 
   const handleManualAuth = () => {
     const cleanToken = token.trim();
     if (!cleanToken) {
-      setAuthError('Please paste your token.');
+      setAuthError('Please paste your API token.');
       return;
     }
     setAuthError('');
@@ -266,7 +265,7 @@ export default function BinarySpotPro() {
           wsRef.current.send(JSON.stringify({ authorize: cleanToken }));
         } else {
           setIsAuthorizing(false);
-          setAuthError('Connecting gateway. Please tap authorize again in 2 seconds.');
+          setAuthError('Connecting to Deriv Gateway. Tap authorize again in 2 seconds.');
         }
       }, 1000);
       return;
@@ -331,7 +330,7 @@ export default function BinarySpotPro() {
     if (['DIGITMATCH', 'DIGITDIFF', 'DIGITOVER', 'DIGITUNDER'].includes(chosenStrategy)) {
       payload.barrier = predictionDigit.toString();
     }
-    addLog(`Sending ${chosenStrategy} order ($${currentStakeRef.current})...`, 'trade');
+    addLog(`Submitting ${chosenStrategy} order ($${currentStakeRef.current})...`, 'trade');
     wsRef.current.send(JSON.stringify(payload));
   };
 
@@ -882,14 +881,14 @@ export default function BinarySpotPro() {
         )}
       </main>
 
-      {/* Auth Modal with Chrome OAuth & Token Support */}
+      {/* Auth Modal */}
       {isAuthModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f1522] border border-slate-700 max-w-md w-full p-6 rounded-3xl shadow-2xl space-y-6">
             <div className="flex justify-between items-center text-left">
               <div>
                 <h3 className="text-lg font-bold text-white">Connect Deriv Account</h3>
-                <p className="text-xs text-slate-400">Authenticate via Spotpro App</p>
+                <p className="text-xs text-slate-400">Authenticate Spotpro</p>
               </div>
               <button onClick={() => setIsAuthModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
@@ -905,7 +904,7 @@ export default function BinarySpotPro() {
                 onClick={handleOAuthLogin}
                 className="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl transition transform active:scale-95 flex items-center justify-center gap-2"
               >
-                <span>🔑</span> Authorize with Deriv Account
+                <span>🔑</span> Authorize Spotpro on Deriv
               </button>
 
               <div className="flex items-center gap-3">
@@ -917,7 +916,7 @@ export default function BinarySpotPro() {
               <div className="space-y-2">
                 <input
                   type="text"
-                  placeholder="Paste Token (e.g. pat_0fb05588...)"
+                  placeholder="Paste Token / Key"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                   className="w-full bg-[#151d2d] border border-slate-700 p-3 rounded-xl text-sm text-slate-200 focus:border-emerald-500 font-mono"
