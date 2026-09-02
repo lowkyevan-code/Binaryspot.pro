@@ -1,0 +1,182 @@
+import { NextResponse } from 'next/server';
+
+const APP_ID =
+  '34hh45FQkPfMgbgj20uoR';
+
+const API_BASE =
+  'https://api.derivws.com';
+
+export async function GET(request) {
+  try {
+    const accessToken =
+      request.cookies.get(
+        'deriv_access_token'
+      )?.value;
+
+    if (!accessToken) {
+      return NextResponse.json(
+        {
+          authenticated: false,
+        },
+        {
+          status: 401,
+        }
+      );
+    }
+
+    const accountsResponse =
+      await fetch(
+        `${API_BASE}/trading/v1/options/accounts`,
+        {
+          headers: {
+            Authorization:
+              `Bearer ${accessToken}`,
+            'Deriv-App-ID': APP_ID,
+          },
+          cache: 'no-store',
+        }
+      );
+
+    const accountsData =
+      await accountsResponse.json();
+
+    if (!accountsResponse.ok) {
+      console.error(
+        'Deriv accounts error:',
+        accountsData
+      );
+
+      return NextResponse.json(
+        {
+          authenticated: false,
+          error:
+            accountsData?.errors?.[0]
+              ?.message ||
+            'Unable to load Deriv account.',
+        },
+        {
+          status:
+            accountsResponse.status,
+        }
+      );
+    }
+
+    let accounts =
+      accountsData?.data || [];
+
+    if (!Array.isArray(accounts)) {
+      accounts = [accounts].filter(
+        Boolean
+      );
+    }
+
+    if (!accounts.length) {
+      return NextResponse.json(
+        {
+          authenticated: true,
+          account: null,
+          error:
+            'No Options trading account found.',
+        }
+      );
+    }
+
+    const realAccount =
+      accounts.find(
+        (account) =>
+          account.account_type === 'real'
+      );
+
+    const demoAccount =
+      accounts.find(
+        (account) =>
+          account.account_type === 'demo'
+      );
+
+    const account =
+      realAccount ||
+      demoAccount ||
+      accounts[0];
+
+    const accountId =
+      account.account_id;
+
+    const otpResponse =
+      await fetch(
+        `${API_BASE}/trading/v1/options/accounts/${encodeURIComponent(
+          accountId
+        )}/otp`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization:
+              `Bearer ${accessToken}`,
+            'Deriv-App-ID': APP_ID,
+            'Content-Type':
+              'application/json',
+          },
+          cache: 'no-store',
+        }
+      );
+
+    const otpData =
+      await otpResponse.json();
+
+    if (
+      !otpResponse.ok ||
+      !otpData?.data?.url
+    ) {
+      console.error(
+        'Deriv OTP error:',
+        otpData
+      );
+
+      return NextResponse.json(
+        {
+          authenticated: true,
+          account,
+          error:
+            otpData?.errors?.[0]
+              ?.message ||
+            'Unable to create trading connection.',
+        },
+        {
+          status:
+            otpResponse.status || 500,
+        }
+      );
+    }
+
+    return NextResponse.json({
+      authenticated: true,
+
+      account: {
+        id: account.account_id,
+        balance:
+          account.balance ?? 0,
+        currency:
+          account.currency || 'USD',
+        type:
+          account.account_type,
+      },
+
+      wsUrl: otpData.data.url,
+    });
+  } catch (error) {
+    console.error(
+      'Deriv session error:',
+      error
+    );
+
+    return NextResponse.json(
+      {
+        authenticated: false,
+        error:
+          'Unable to create Deriv session.',
+      },
+      {
+        status: 500,
+      }
+    );
+  }
+}
